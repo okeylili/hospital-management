@@ -1,4 +1,4 @@
-import { Appointment } from "../models/Appointment.js";
+import { Appointment } from "../models/Appointment.js"; 
 import { Billing } from "../models/Billing.js";
 import { Patient } from "../models/Patient.js";
 
