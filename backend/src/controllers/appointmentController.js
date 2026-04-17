@@ -1,56 +1,100 @@
-import mongoose from "mongoose";
-import { Appointment } from "../models/Appointment.js";
+import express from "express";
+import { MongoClient, ObjectId } from "mongodb";
 
-export async function listAppointments(req, res) {
+const app = express();
+app.use(express.json());
+
+// 🔗 DB Connection
+const client = new MongoClient("mongodb://127.0.0.1:27017");
+let db;
+
+async function connectDB() {
+  await client.connect();
+  db = client.db("hospital");
+  console.log("MongoDB Connected");
+}
+connectDB();
+
+// =======================
+// 📌 GET Appointments (filter + pagination)
+// =======================
+app.get("/appointments", async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
-    const { status, doctor_id, patient_id, from, to } = req.query;
-    const filter = {};
+    const { status, doctor_id, patient_id, from, to, page = 1, limit = 10 } = req.query;
+
+    let filter = {};
+
     if (status) filter.status = status;
-    if (patient_id && mongoose.isValidObjectId(patient_id)) filter.patient_id = patient_id;
-    if (doctor_id && mongoose.isValidObjectId(doctor_id)) filter.doctor_id = doctor_id;
+
+    if (patient_id) filter.patient_id = new ObjectId(patient_id);
+    if (doctor_id) filter.doctor_id = new ObjectId(doctor_id);
+
     if (from || to) {
       filter.date = {};
       if (from) filter.date.$gte = new Date(from);
       if (to) filter.date.$lte = new Date(to);
     }
-    if (req.user.role === "doctor" && req.user.doctor_id) {
-      filter.doctor_id = new mongoose.Types.ObjectId(req.user.doctor_id);
-    }
-    const [items, total] = await Promise.all([
-      Appointment.find(filter)
-        .populate("patient_id", "name age gender contact")
-        .populate("doctor_id", "name specialization")
-        .sort({ date: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
-      Appointment.countDocuments(filter),
-    ]);
-    res.json({ data: items, total, page, limit, pages: Math.ceil(total / limit) || 1 });
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
-}
 
-export async function createAppointment(req, res) {
+    // 🔒 Doctor restriction
+    if (req.user?.role === "doctor" && req.user?.doctor_id) {
+      filter.doctor_id = new ObjectId(req.user.doctor_id);
+    }
+
+    const appointments = await db
+      .collection("appointments")
+      .find(filter)
+      .sort({ date: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .toArray();
+
+    const total = await db.collection("appointments").countDocuments(filter);
+
+    res.json({
+      data: appointments,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// =======================
+// 📌 CREATE Appointment
+// =======================
+app.post("/appointments", async (req, res) => {
   try {
-    if (req.user.role === "doctor" && req.user.doctor_id) {
-      const did = req.body.doctor_id?.toString();
-      if (did !== req.user.doctor_id.toString()) {
-        return res.status(403).json({ message: "Doctors can only book for their own profile" });
+    const body = req.body;
+
+    // 🔒 Doctor restriction
+    if (req.user?.role === "doctor" && req.user?.doctor_id) {
+      if (body.doctor_id !== req.user.doctor_id) {
+        return res.status(403).json({
+          message: "Doctors can only book for their own profile",
+        });
       }
     }
-    const appt = await Appointment.create(req.body);
-    const populated = await Appointment.findById(appt._id)
-      .populate("patient_id", "name age gender contact")
-      .populate("doctor_id", "name specialization");
-    res.status(201).json(populated);
+
+    // Convert IDs to ObjectId
+    body.patient_id = new ObjectId(body.patient_id);
+    body.doctor_id = new ObjectId(body.doctor_id);
+    body.date = new Date(body.date);
+
+    const result = await db.collection("appointments").insertOne(body);
+
+    const newAppointment = await db
+      .collection("appointments")
+      .findOne({ _id: result.insertedId });
+
+    res.status(201).json(newAppointment);
   } catch (e) {
-    if (e.name === "ValidationError") {
-      return res.status(400).json({ message: Object.values(e.errors).map((x) => x.message).join(", ") });
-    }
-    res.status(500).json({ message: e.message });
+    res.status(500).json({ error: e.message });
   }
-}
+});
+
+// =======================
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
