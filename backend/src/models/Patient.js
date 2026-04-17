@@ -1,57 +1,76 @@
-import mongoose from "mongoose";
+import { MongoClient, ObjectId } from "mongodb";
 
-const medicalHistoryEntrySchema = new mongoose.Schema(
-  {
-    condition: {
-      type: String,
-      required: [true, "Condition is required"],
-      trim: true,
-    },
-    diagnosed_at: { type: Date, default: null },
-    notes: { type: String, trim: true, default: "" },
-  },
-  { _id: true }
-);
+const client = new MongoClient("mongodb://127.0.0.1:27017");
 
-const patientSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: [true, "Patient name is required"],
-      trim: true,
-    },
-    age: {
-      type: Number,
-      required: [true, "Age is required"],
-      min: [0, "Age cannot be negative"],
-      max: [150, "Age is invalid"],
-    },
-    gender: {
-      type: String,
-      required: [true, "Gender is required"],
-      enum: {
-        values: ["male", "female", "other"],
-        message: "{VALUE} is not valid",
+async function run() {
+  await client.connect();
+  const db = client.db("hospital");
+  const collection = db.collection("patients");
+
+  async function createPatient(data) {
+    const allowedGender = ["male", "female", "other"];
+
+    if (!data.name) throw new Error("name is required");
+    if (data.age === undefined) throw new Error("age is required");
+    if (data.age < 0 || data.age > 150) throw new Error("invalid age");
+    if (!data.gender || !allowedGender.includes(data.gender)) throw new Error("invalid gender");
+    if (!data.contact || !data.contact.phone) throw new Error("phone is required");
+
+    const doc = {
+      name: data.name.trim(),
+      age: data.age,
+      gender: data.gender,
+      contact: {
+        phone: data.contact.phone.trim(),
+        email: data.contact.email || ""
       },
-    },
+      medical_history: (data.medical_history || []).map(item => ({
+        _id: new ObjectId(),
+        condition: item.condition,
+        diagnosed_at: item.diagnosed_at ? new Date(item.diagnosed_at) : null,
+        notes: item.notes || ""
+      })),
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    return await collection.insertOne(doc);
+  }
+
+  async function getPatients(filter = {}) {
+    return await collection.find(filter).toArray();
+  }
+
+  async function updatePatient(id, data) {
+    data.updatedAt = new Date();
+    return await collection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: data }
+    );
+  }
+
+  async function deletePatient(id) {
+    return await collection.deleteOne({ _id: new ObjectId(id) });
+  }
+
+  await createPatient({
+    name: "Rahul",
+    age: 22,
+    gender: "male",
     contact: {
-      phone: {
-        type: String,
-        required: [true, "Phone is required"],
-        trim: true,
-      },
-      email: {
-        type: String,
-        trim: true,
-        default: "",
-      },
+      phone: "9876543210",
+      email: "rahul@gmail.com"
     },
-    medical_history: {
-      type: [medicalHistoryEntrySchema],
-      default: [],
-    },
-  },
-  { timestamps: true }
-);
+    medical_history: [
+      {
+        condition: "Fever",
+        diagnosed_at: "2026-04-01",
+        notes: "Mild"
+      }
+    ]
+  });
 
-export const Patient = mongoose.model("Patient", patientSchema);
+  console.log(await getPatients());
+}
+
+run();
